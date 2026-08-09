@@ -154,7 +154,10 @@ class VerisureLock(  # type: ignore[override]
 ):
     """Representation of a Verisure OWA smart lock."""
 
-    _attr_has_entity_name = False
+    # The lock has its own child device under the installation, so the entity
+    # is that device's primary one and takes its name from it — a user renaming
+    # the device renames the lock too.
+    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -179,13 +182,20 @@ class VerisureLock(  # type: ignore[override]
         self._device_id: str = device_id
         self._lock_config: SmartLock | None = lock_config
 
-        # Name: prefer lock_config.location if non-empty, else fallback
+        # Device name: prefer the panel's own location label, else a plain
+        # fallback. The installation alias is deliberately absent — the lock is
+        # already a child of the installation device, and Verisure sets that
+        # alias to the postal address.
         name = (
             lock_config.location
             if lock_config and lock_config.location
-            else f"{installation.alias} Lock {device_id}"
+            else f"Lock {device_id}"
         )
-        self._attr_name = name
+        self._attr_name = None
+        # Human-readable label for notifications and the options flow. The
+        # entity name is None (it inherits the device's), so messages need
+        # their own handle on what to call this lock.
+        self._lock_label = name
         self._attr_unique_id = (
             f"v4_securitas_direct.{installation.number}_lock_{device_id}"
         )
@@ -234,15 +244,20 @@ class VerisureLock(  # type: ignore[override]
         """Return the device ID."""
         return self._device_id
 
+    @property
+    def label(self) -> str:
+        """Return the human-readable lock name used in messages and options."""
+        return self._lock_label
+
     def update_lock_config(self, lock_config: SmartLock) -> None:
         """Update lock configuration after deferred retry."""
         self._lock_config = lock_config
         if lock_config.location:
-            self._attr_name = lock_config.location
+            self._lock_label = lock_config.location
         self._attr_device_info = lock_device_info(
             self._installation,
             self._device_id,
-            self._attr_name,
+            self._lock_label,
             lock_config,
             self._client.hass,
         )
@@ -377,7 +392,7 @@ class VerisureLock(  # type: ignore[override]
             await self._fire_lock_notification(
                 title="Auto-lock failed",
                 message=(
-                    f"Could not lock {self._attr_name} when arming. "
+                    f"Could not lock {self._lock_label} when arming. "
                     f"The alarm is armed but the door is unlocked."
                 ),
             )
@@ -670,7 +685,7 @@ class VerisureLock(  # type: ignore[override]
         diagnosis.
         """
         title = f"{action} failed"
-        message = f"Could not {action.lower()} {self._attr_name}: {error_reason}"
+        message = f"Could not {action.lower()} {self._lock_label}: {error_reason}"
         await self._fire_lock_notification(title=title, message=message)
         raise HomeAssistantError(message)
 
@@ -708,7 +723,7 @@ class VerisureLock(  # type: ignore[override]
             await self._fire_lock_notification(
                 title="Auto-disarm failed",
                 message=(
-                    f"Could not disarm before unlocking {self._attr_name}. "
+                    f"Could not disarm before unlocking {self._lock_label}. "
                     f"The door will be unlocked but the alarm may still be armed."
                 ),
             )
@@ -744,7 +759,7 @@ class VerisureLock(  # type: ignore[override]
             # needs its own wording — the helper's generic "Could not
             # unlock X: Y" would understate the half-success.
             message = (
-                f"{self._attr_name}: alarm has been disarmed but the door "
+                f"{self._lock_label}: alarm has been disarmed but the door "
                 f"is still locked ({unlock_error})."
             )
             await self._fire_lock_notification(title="Unlock failed", message=message)

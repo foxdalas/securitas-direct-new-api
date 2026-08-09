@@ -799,13 +799,21 @@ class TestVerisureLockInit:
                 f"Expected is_unlocking=False for state={state}"
             )
 
-    def test_name_returns_installation_alias_with_device_id(self):
-        lock = make_lock()
-        assert lock.name == "Home Lock 01"
+    def test_entity_name_is_none_so_ha_uses_the_device_name(self):
+        """The lock is its device's primary entity.
 
-    def test_name_includes_custom_device_id(self):
-        lock = make_lock(device_id="02")
-        assert lock.name == "Home Lock 02"
+        Its name comes from the device, so renaming that device in HA renames
+        the lock. The label used in notifications lives separately.
+        """
+        lock = make_lock()
+        assert lock.name is None
+        assert lock.has_entity_name is True
+
+    def test_label_falls_back_without_a_panel_location(self):
+        """The fallback drops the installation alias — the lock is already
+        a child of the installation device, and the alias is a postal address."""
+        assert make_lock().label == "Lock 01"
+        assert make_lock(device_id="02").label == "Lock 02"
 
 
 class TestVerisureLockConfig:
@@ -848,15 +856,15 @@ class TestVerisureLockConfig:
             ("securitas", "v4_securitas_direct.123456_lock_01")
         }
         assert info["via_device"] == ("securitas", "v4_securitas_direct.123456")
-        assert info["name"] == "Home Lock 01"
+        assert info["name"] == "Lock 01"
         assert info["manufacturer"] == "Verisure"
 
     def test_device_info_fallback_empty_location(self):
-        """Lock with config but empty location uses installation alias."""
+        """Lock with config but an empty location uses the plain fallback."""
         config = SmartLock(res="OK", location="", family="DR")
         lock = make_lock(device_id="02", lock_config=config)
         info = lock._attr_device_info
-        assert info["name"] == "Home Lock 02"
+        assert info["name"] == "Lock 02"
         assert info["model"] == "DR"
 
     def test_device_info_different_devices_have_different_identifiers(self):

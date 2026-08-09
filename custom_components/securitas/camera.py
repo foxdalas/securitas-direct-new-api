@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from . import DOMAIN, SIGNAL_CAMERA_STATE, VerisureHub
 from .coordinators import CameraCoordinator
@@ -23,11 +25,43 @@ from .verisure_owa_api.models import ActivityCategory, CameraDevice
 
 _LOGGER = logging.getLogger(__name__)
 
+# Why `async_camera_image` is serving the placeholder, exposed as the
+# `image_status` attribute.
+IMAGE_STATUS_OK = "ok"
+IMAGE_STATUS_NO_DATA = "no_data"  # coordinator hasn't fetched yet
+IMAGE_STATUS_NO_FRAME = "no_frame"  # nothing held for this zone
+IMAGE_STATUS_DECODE_FAILED = "decode_failed"  # base64 rejected
+IMAGE_STATUS_NOT_JPEG = "not_jpeg"  # decoded, but not a JPEG
+
+_PANEL_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 _PLACEHOLDER_IMAGE_PATH = Path(__file__).parent / "placeholder.jpg"
 # Cache for the placeholder JPEG bytes — populated on first access via the
 # event loop's executor to avoid sync file I/O during integration startup.
 _PLACEHOLDER_IMAGE: bytes | None = None
 _placeholder_lock: asyncio.Lock | None = None
+
+
+def _normalise_panel_timestamp(value: str | None) -> str | None:
+    """Return the panel's timestamp as ISO 8601 with an explicit offset.
+
+    The panel sends naive ``YYYY-MM-DD HH:MM:SS`` in the installation's local
+    time. Passing that through verbatim pushed the parsing onto every consumer
+    — and browsers disagree about it: Chrome reads it as local time while
+    Safari has historically rejected it outright, leaving the card to print
+    the raw string. Stamping HA's timezone on it makes the value unambiguous
+    and parseable everywhere.
+
+    Anything that doesn't match the panel format is returned untouched rather
+    than dropped, so an unexpected shape stays visible.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, _PANEL_TIME_FORMAT)
+    except ValueError:
+        return value
+    return parsed.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE).isoformat()
 
 
 async def _get_placeholder_image(hass: HomeAssistant) -> bytes:
@@ -101,27 +135,41 @@ class VerisureCamera(CoordinatorEntity[CameraCoordinator], Camera):
             installation, camera_device, hub.hass
         )
 
+    def _resolve_image(self) -> tuple[bytes | None, str]:
+        """Return the current frame, and why it is or is not available.
+
+        Four different conditions all end at the same placeholder JPEG, which
+        left a user unable to tell a broken camera from one that simply has
+        not captured recently.  The reason is surfaced as ``image_status`` so
+        the difference is visible without reading the debug log.
+        """
+        data = self.coordinator.data
+        if data is None:
+            return None, IMAGE_STATUS_NO_DATA
+        if self._mode == "full":
+            image = data.full_images.get(self._zone_id)
+            if image is None:
+                return None, IMAGE_STATUS_NO_FRAME
+            return image, IMAGE_STATUS_OK
+        thumb = data.thumbnails.get(self._zone_id)
+        if thumb is None or not thumb.image:
+            return None, IMAGE_STATUS_NO_FRAME
+        try:
+            image_bytes = base64.b64decode(thumb.image)
+        except (ValueError, TypeError):
+            return None, IMAGE_STATUS_DECODE_FAILED
+        if not image_bytes.startswith(b"\xff\xd8"):
+            return None, IMAGE_STATUS_NOT_JPEG
+        return image_bytes, IMAGE_STATUS_OK
+
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return the relevant image for this mode, or a placeholder."""
-        if self.coordinator.data is None:
+        image, _status = self._resolve_image()
+        if image is None:
             return await _get_placeholder_image(self.hass)
-        if self._mode == "full":
-            image = self.coordinator.data.full_images.get(self._zone_id)
-            if image is None:
-                return await _get_placeholder_image(self.hass)
-            return image
-        thumb = self.coordinator.data.thumbnails.get(self._zone_id)
-        if thumb is None or not thumb.image:
-            return await _get_placeholder_image(self.hass)
-        try:
-            image_bytes = base64.b64decode(thumb.image)
-        except (ValueError, TypeError):
-            return await _get_placeholder_image(self.hass)
-        if not image_bytes.startswith(b"\xff\xd8"):
-            return await _get_placeholder_image(self.hass)
-        return image_bytes
+        return image
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # type: ignore[override]
@@ -143,7 +191,10 @@ class VerisureCamera(CoordinatorEntity[CameraCoordinator], Camera):
             thumb = data.thumbnails.get(self._zone_id)
             if thumb is not None:
                 timestamp = thumb.timestamp
-        attrs: dict[str, Any] = {"image_timestamp": timestamp}
+        attrs: dict[str, Any] = {
+            "image_timestamp": _normalise_panel_timestamp(timestamp),
+            "image_status": self._resolve_image()[1],
+        }
         if self._mode == "thumbnail":
             attrs["capturing"] = self._client.is_capturing(
                 self._installation.number, self._camera_device.zone_id

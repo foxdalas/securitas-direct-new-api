@@ -46,23 +46,6 @@ class CombinedVerisureOwaAlarmPanel(BaseVerisureOwaAlarmPanel):
     """The household-intent panel — drives all three axes via the user's
     HA-state-to-VerisureOwaState mapping configured in options."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._attr_name = f"Main - {self._installation.alias}"
-
-    @property
-    def suggested_object_id(self) -> str:
-        """Force the entity_id slug to ``<alias>``, matching the v4 layout.
-
-        With ``has_entity_name = False`` the default would slugify the friendly
-        name ``Main - <alias>`` and produce ``main_<alias>``, which both
-        breaks v4 dashboards and (when an old entity already occupies that
-        name) lands on the doubled-alias collision form. Returning the bare
-        installation alias here is what HA seeds the entity_id from on first
-        registration.
-        """
-        return self._installation.alias
-
     def _resolve_target_state(self, ha_state: str) -> AlarmState:
         """Convert an HA alarm mode to an AlarmState using the verisure state map."""
         if ha_state == AlarmControlPanelState.DISARMED:
@@ -178,35 +161,25 @@ class _AxisSubPanelMixin:
 
     @property
     def suggested_object_id(self) -> str:
-        """Force the entity_id slug to ``<alias>_<circuit>`` on fresh installs.
+        """Return the circuit name; HA prepends the device name itself.
 
-        ``_SUFFIX`` is the *unique-id* suffix (``_interior`` / ``_perimeter``
-        / ``_annex``) — kept as-is so existing registry entries keep the same
-        unique_id. The *display* slug returned here uses a **space**
-        separator (``"<alias> interior"``), not the unique-id underscore, for
-        the HA 2026.5+ entity-registry path:
+        This value reaches the registry as ``object_id_base``, and with
+        ``has_entity_name = True`` the registry composes
+        ``f"{device_name} {object_id_base}"`` before slugifying — yielding the
+        canonical ``alarm_control_panel.<alias>_<circuit>``.
 
-        HA 2026.5 unconditionally prepends the device name onto the
-        registry's ``object_id_base`` for entities with
-        ``has_entity_name=False``, then runs a strip-prefix heuristic to
-        avoid doubling. That heuristic only recognises space/dash/colon as
-        the separator following the matched prefix — an underscore between
-        ``<alias>`` and ``_<circuit>`` is not stripped, so the device name
-        ends up prepended twice and the entity_id comes out as
-        ``alarm_control_panel.<alias>_<alias>_<circuit>`` (the
-        "doubled-alias collision form"). Returning a space-separated value
-        here keeps the heuristic happy and produces the canonical
-        ``alarm_control_panel.<alias>_<circuit>`` after HA's own slugify
-        pass. The same value still works on HA < 2026.5 (which never
-        prepends the device name when ``has_entity_name=False``) because
-        slugify maps space → ``_`` in either case.
+        Returning the alias here as well (which the previous
+        ``has_entity_name = False`` layout required, to satisfy a strip-prefix
+        heuristic) would now double it into ``<alias>_<alias>_<circuit>``.
 
-        The ``_heal_subpanel_entity_id`` helper relocates already-broken
-        entries on existing installs that got the underscore-form slug
-        before this fix landed.
+        ``_SUFFIX`` stays the *unique-id* suffix (``_interior`` /
+        ``_perimeter`` / ``_annex``) so existing registry entries keep their
+        unique_id; only the display slug is derived from it. Entity IDs
+        already in the registry are never recomputed, so this affects fresh
+        installs only. ``_heal_subpanel_entity_id`` relocates entries on
+        existing installs that got a broken slug before this landed.
         """
-        circuit = self._SUFFIX.lstrip("_")  # type: ignore[attr-defined]
-        return f"{self._installation.alias} {circuit}"  # type: ignore[attr-defined]
+        return self._SUFFIX.lstrip("_")  # type: ignore[attr-defined]
 
     def _update_from_coordinator(self, data: AlarmStatusData) -> None:  # type: ignore[override]
         """Project the coordinator's joint state onto this panel's axis.
@@ -287,7 +260,7 @@ class InteriorVerisureOwaAlarmPanel(_AxisSubPanelMixin, BaseVerisureOwaAlarmPane
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._attr_unique_id = f"{self._attr_unique_id}{self._SUFFIX}"
-        self._attr_name = f"Interior - {self._installation.alias}"
+        self._attr_name = "Interior"
         # Seed _attr_supported_features so HA's cached_property mechanism
         # (and the entity registry's cached supported_features) start from
         # the current resolver state. The @property below stays authoritative
@@ -374,7 +347,7 @@ class PerimeterVerisureOwaAlarmPanel(_AxisSubPanelMixin, BaseVerisureOwaAlarmPan
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._attr_unique_id = f"{self._attr_unique_id}{self._SUFFIX}"
-        self._attr_name = f"Perimeter - {self._installation.alias}"
+        self._attr_name = "Perimeter"
         self._recompute_supported_features()
 
     def _compute_supported_features(self) -> AlarmControlPanelEntityFeature:
@@ -435,7 +408,7 @@ class AnnexVerisureOwaAlarmPanel(_AxisSubPanelMixin, BaseVerisureOwaAlarmPanel):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._attr_unique_id = f"{self._attr_unique_id}{self._SUFFIX}"
-        self._attr_name = f"Annex - {self._installation.alias}"
+        self._attr_name = "Annex"
         self._recompute_supported_features()
 
     def _compute_supported_features(self) -> AlarmControlPanelEntityFeature:

@@ -147,7 +147,12 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
 ):
     """Representation of a Verisure alarm status."""
 
-    _attr_has_entity_name = False
+    # has_entity_name=True keeps the installation alias out of the entity name.
+    # Verisure sets the alias to the postal address, so baking it in produced
+    # names like "Main - CARRER TORREVELLA,5,CALDES D ESTRAC" that overflowed
+    # the stock alarm card and, worse, ignored a user's device rename entirely.
+    # The name now comes from the device, which the user can rename.
+    _attr_has_entity_name = True
     # The combined Main panel exposes a user-editable mapping per HA alarm
     # state, so a panel-rejected command is a config issue — the rejection
     # notification points the user at the mappings UI. Sub-panels override
@@ -165,7 +170,9 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
         CoordinatorEntity.__init__(self, coordinator)  # type: ignore[arg-type]
         VerisureEntity.__init__(self, installation, client)
         self._device: str = installation.address
-        self._attr_name = installation.alias
+        # None marks this as the device's primary entity: HA names it exactly
+        # after the device. Sub-panels override with their circuit name.
+        self._attr_name = None
         self._attr_unique_id: str | None = f"v4_securitas_direct.{installation.number}"
         self._time: datetime.datetime = datetime.datetime.now()
         self._message: str = ""

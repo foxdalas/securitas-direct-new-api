@@ -259,6 +259,70 @@ async def _discover_locks(
                 _schedule_lock_config_retry(hass, hub, installation, lk)
 
 
+def _prune_superseded_alias_zones(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    installation: Installation,
+    targets: list[Any],
+) -> None:
+    """Remove alias-keyed zone entities now covered by a real inventory zone.
+
+    An alias entity exists because the panel named a zone the inventory could
+    not account for — a device type not yet in ZONE_DEVICE_TYPES, typically.
+    Once the inventory does account for it the two describe the same physical
+    contact, on two devices with the same name, and the alias one is stale.
+
+    Matching is on the slug, so a zone whose panel alias was *truncated*
+    relative to the inventory name is deliberately left alone: the two slugs
+    differ, and deleting on a guess is worse than leaving a duplicate.
+    """
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+
+    from .binary_sensor import zone_alias_slug
+
+    superseded = {f"alias_{zone_alias_slug(t.name)}" for t in targets}
+    if not superseded:
+        return
+
+    prefix = f"v4_securitas_direct.{installation.number}_zone_"
+    registry = er.async_get(hass)
+    devices = dr.async_get(hass)
+    removed: list[str] = []
+    orphaned_devices: set[str] = set()
+
+    for rle in list(er.async_entries_for_config_entry(registry, entry.entry_id)):
+        if not rle.unique_id.startswith(prefix):
+            continue
+        key = rle.unique_id[len(prefix) :].removeprefix("battery_")
+        if key not in superseded:
+            continue
+        if rle.device_id:
+            orphaned_devices.add(rle.device_id)
+        registry.async_remove(rle.entity_id)
+        removed.append(rle.entity_id)
+
+    if not removed:
+        return
+    _LOGGER.info(
+        "[zone_discovery] Installation %s: removed %d stale alias entity(ies) "
+        "now covered by the device inventory: %s",
+        installation.number,
+        len(removed),
+        removed,
+    )
+    # Drop the now-empty placeholder devices too, otherwise the registry keeps
+    # a second device with the same name as the real zone.
+    for device_id in orphaned_devices:
+        if er.async_entries_for_device(
+            registry, device_id, include_disabled_entities=True
+        ):
+            continue
+        if devices.async_get(device_id) is None:
+            continue
+        devices.async_update_device(device_id, remove_config_entry_id=entry.entry_id)
+
+
 async def _discover_zones(
     hass: HomeAssistant,
     hub: VerisureHub,
@@ -339,6 +403,7 @@ async def _discover_zones(
 
     if targets:
         _add(targets)
+        _prune_superseded_alias_zones(hass, entry, installation, targets)
 
     def _sync_unknown_aliases() -> None:
         """Give an entity to any zone the panel names but the inventory lacks.

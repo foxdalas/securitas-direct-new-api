@@ -843,3 +843,130 @@ class TestThumbnailRecency:
     def test_window_is_configurable(self):
         thumb = self._thumb(hours=-3)
         assert CameraCoordinator._thumbnail_is_recent(thumb, max_age_hours=4) is True
+
+
+class TestImageStatusAttribute:
+    """The placeholder used to mean four different things at once."""
+
+    @staticmethod
+    def _cam(coordinator, hub, installation, device, full=False):
+        from custom_components.securitas.camera import (
+            VerisureCamera,
+            VerisureCameraFull,
+        )
+
+        cls = VerisureCameraFull if full else VerisureCamera
+        return cls(coordinator, hub, installation, device)
+
+    def test_ok_when_a_frame_is_present(
+        self, mock_coordinator, mock_hub, installation, camera_device, jpeg_thumbnail
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={}
+        )
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+
+        assert cam.extra_state_attributes["image_status"] == "ok"
+
+    def test_no_data_before_the_first_poll(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = None
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+
+        assert cam.extra_state_attributes["image_status"] == "no_data"
+
+    def test_no_frame_when_the_zone_is_empty(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = CameraData(thumbnails={}, full_images={})
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+
+        assert cam.extra_state_attributes["image_status"] == "no_frame"
+
+    def test_no_frame_for_a_full_entity_without_a_full_image(
+        self, mock_coordinator, mock_hub, installation, camera_device, jpeg_thumbnail
+    ):
+        """A camera with no recent capture — the common case, not a fault."""
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={}
+        )
+        cam = self._cam(
+            mock_coordinator, mock_hub, installation, camera_device, full=True
+        )
+
+        assert cam.extra_state_attributes["image_status"] == "no_frame"
+
+    def test_decode_failed_on_bad_base64(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": ThumbnailResponse(image="!!!not base64!!!")},
+            full_images={},
+        )
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+
+        assert cam.extra_state_attributes["image_status"] == "decode_failed"
+
+    def test_not_jpeg_when_the_magic_bytes_are_wrong(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={
+                "QR10": ThumbnailResponse(image=base64.b64encode(b"GIF89a").decode())
+            },
+            full_images={},
+        )
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+
+        assert cam.extra_state_attributes["image_status"] == "not_jpeg"
+
+    async def test_every_failure_still_serves_the_placeholder(
+        self,
+        mock_coordinator,
+        mock_hub,
+        installation,
+        camera_device,
+        placeholder_bytes,
+    ):
+        mock_coordinator.data = None
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+        cam.hass = MagicMock()
+
+        assert await cam.async_camera_image() == placeholder_bytes
+
+
+class TestPanelTimestampNormalisation:
+    """The raw panel string was ambiguous and browsers disagreed about it."""
+
+    @staticmethod
+    def _norm(value):
+        from custom_components.securitas.camera import _normalise_panel_timestamp
+
+        return _normalise_panel_timestamp(value)
+
+    def test_naive_panel_time_gains_an_explicit_offset(self):
+        result = self._norm("2026-08-09 18:14:25")
+
+        assert result is not None
+        assert result.startswith("2026-08-09T18:14:25")
+        # An offset (or Z) must be present — that is the whole point.
+        assert result[19:] not in ("", None)
+
+    def test_round_trips_back_to_the_same_wall_clock(self):
+        from datetime import datetime
+
+        parsed = datetime.fromisoformat(self._norm("2026-08-09 18:14:25"))
+
+        assert (parsed.year, parsed.month, parsed.day) == (2026, 8, 9)
+        assert (parsed.hour, parsed.minute, parsed.second) == (18, 14, 25)
+        assert parsed.tzinfo is not None
+
+    def test_none_and_empty_stay_none(self):
+        assert self._norm(None) is None
+        assert self._norm("") is None
+
+    def test_unexpected_shape_is_passed_through_not_dropped(self):
+        """Better a visible oddity than a silently missing attribute."""
+        assert self._norm("2026-03-09T12:00:00Z") == "2026-03-09T12:00:00Z"
+        assert self._norm("nonsense") == "nonsense"

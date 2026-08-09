@@ -243,7 +243,7 @@ async def _discover_locks(
             entry_data.setdefault("registered_locks", []).append(
                 {
                     "device_id": device_id,
-                    "alias": new_lock._attr_name or device_id,  # pylint: disable=protected-access
+                    "alias": new_lock.label or device_id,
                 }
             )
         lock_add(locks, False)

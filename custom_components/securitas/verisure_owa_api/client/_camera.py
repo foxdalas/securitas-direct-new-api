@@ -309,7 +309,14 @@ class _CameraMixin(_DeviceMixin):
         devices = envelope.data.xSGetPhotoImages.devices or []
         if not devices:
             return None
-        images = devices[0].get("images") or []
+        # The query is keyed by idSignal so a single device is expected, but
+        # match on it rather than trusting position — picking index 0 out of a
+        # multi-device response would silently return another camera's frame.
+        device = next(
+            (d for d in devices if str(d.get("idSignal") or "") == str(id_signal)),
+            devices[0],
+        )
+        images = device.get("images") or []
         binary_images = [
             img for img in images if img.get("type") == "BINARY" and img.get("image")
         ]

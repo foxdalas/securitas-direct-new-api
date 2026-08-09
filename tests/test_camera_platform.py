@@ -664,14 +664,21 @@ class TestVerisureCameraFull:
     ):
         from custom_components.securitas.camera import VerisureCameraFull
 
+        # No full image held: the entity must not advertise a frame it cannot
+        # serve — the card reads this attribute to decide the full view exists.
         mock_coordinator.data = CameraData(
             thumbnails={"QR10": jpeg_thumbnail}, full_images={}
         )
         cam = VerisureCameraFull(
             mock_coordinator, mock_hub, installation, camera_device
         )
-        attrs = cam.extra_state_attributes
-        assert attrs["image_timestamp"] == "2026-03-09T12:00:00Z"
+        assert cam.extra_state_attributes["image_timestamp"] is None
+
+        # Once the full image is held it reports the frame's own timestamp.
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={"QR10": b"\xff\xd8f"}
+        )
+        assert cam.extra_state_attributes["image_timestamp"] == "2026-03-09T12:00:00Z"
 
     def test_extra_state_attributes_no_data(
         self, mock_coordinator, mock_hub, installation, camera_device
@@ -717,3 +724,122 @@ class TestCameraV5Schema:
             cam._attr_unique_id
             == f"v4_securitas_direct.{installation.number}_camera_full_{camera_device.zone_id}"
         )
+
+
+class TestFullImageTimestampAttribute:
+    """The full-image entity must not claim a frame it does not hold.
+
+    The Lovelace card decides whether a full-resolution view exists by testing
+    `image_timestamp` on the full entity, so reporting the thumbnail's stamp
+    regardless made it offer a view that could only render the placeholder.
+    """
+
+    @staticmethod
+    def _entities(coordinator, hub, installation, device):
+        from custom_components.securitas.camera import (
+            VerisureCamera,
+            VerisureCameraFull,
+        )
+
+        return (
+            VerisureCamera(coordinator, hub, installation, device),
+            VerisureCameraFull(coordinator, hub, installation, device),
+        )
+
+    def test_full_reports_none_when_no_full_image_held(
+        self, mock_coordinator, mock_hub, installation, camera_device, jpeg_thumbnail
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={}
+        )
+        thumb_cam, full_cam = self._entities(
+            mock_coordinator, mock_hub, installation, camera_device
+        )
+
+        # The thumbnail entity does have a frame, so it keeps reporting one.
+        assert thumb_cam.extra_state_attributes["image_timestamp"] is not None
+        assert full_cam.extra_state_attributes["image_timestamp"] is None
+
+    def test_full_reports_the_stamp_once_the_image_is_held(
+        self, mock_coordinator, mock_hub, installation, camera_device, jpeg_thumbnail
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={"QR10": b"\xff\xd8full"}
+        )
+        _, full_cam = self._entities(
+            mock_coordinator, mock_hub, installation, camera_device
+        )
+
+        assert (
+            full_cam.extra_state_attributes["image_timestamp"]
+            == jpeg_thumbnail.timestamp
+        )
+
+    def test_full_reports_none_without_coordinator_data(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = None
+        _, full_cam = self._entities(
+            mock_coordinator, mock_hub, installation, camera_device
+        )
+
+        assert full_cam.extra_state_attributes["image_timestamp"] is None
+
+    def test_only_the_thumbnail_entity_exposes_capturing(
+        self, mock_coordinator, mock_hub, installation, camera_device, jpeg_thumbnail
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": jpeg_thumbnail}, full_images={"QR10": b"\xff\xd8full"}
+        )
+        thumb_cam, full_cam = self._entities(
+            mock_coordinator, mock_hub, installation, camera_device
+        )
+
+        assert "capturing" in thumb_cam.extra_state_attributes
+        assert "capturing" not in full_cam.extra_state_attributes
+
+
+class TestThumbnailRecency:
+    """The poll path only fetches a full image for a recent thumbnail.
+
+    Panel timestamps are naive local time; reading them as UTC skewed this by
+    the local offset — permanently "too old" west of Greenwich, where the poll
+    path would never fetch a full image at all.
+    """
+
+    @staticmethod
+    def _thumb(**delta):
+        from datetime import datetime, timedelta
+
+        stamp = (datetime.now() + timedelta(**delta)).strftime("%Y-%m-%d %H:%M:%S")
+        return ThumbnailResponse(timestamp=stamp)
+
+    def test_fresh_thumbnail_is_recent(self):
+        assert CameraCoordinator._thumbnail_is_recent(self._thumb(minutes=-5)) is True
+
+    def test_thumbnail_just_inside_the_window(self):
+        assert CameraCoordinator._thumbnail_is_recent(self._thumb(minutes=-55)) is True
+
+    def test_thumbnail_past_the_window_is_stale(self):
+        assert CameraCoordinator._thumbnail_is_recent(self._thumb(hours=-3)) is False
+
+    def test_days_old_thumbnail_is_stale(self):
+        assert CameraCoordinator._thumbnail_is_recent(self._thumb(days=-10)) is False
+
+    def test_future_timestamp_counts_as_recent(self):
+        """Panel clock ahead of HA's must not read as expired."""
+        assert CameraCoordinator._thumbnail_is_recent(self._thumb(minutes=30)) is True
+
+    def test_unparseable_timestamp_is_not_recent(self):
+        assert (
+            CameraCoordinator._thumbnail_is_recent(ThumbnailResponse(timestamp=None))
+            is False
+        )
+        assert (
+            CameraCoordinator._thumbnail_is_recent(ThumbnailResponse(timestamp="nope"))
+            is False
+        )
+
+    def test_window_is_configurable(self):
+        thumb = self._thumb(hours=-3)
+        assert CameraCoordinator._thumbnail_is_recent(thumb, max_age_hours=4) is True

@@ -1276,3 +1276,58 @@ class TestInventoryFilters:
 
         assert len(zones) == 1
         assert zones[0].id == "5"
+
+
+class TestGetFullImageDeviceSelection:
+    """The requested signal picks the device, not its position in the list."""
+
+    @staticmethod
+    def _device(id_signal: str, payload: bytes) -> dict:
+        return {
+            "id": id_signal,
+            "idSignal": id_signal,
+            "code": "01",
+            "name": f"Camera {id_signal}",
+            "quality": "HIGH",
+            "images": [
+                {
+                    "id": f"img-{id_signal}",
+                    "image": base64.b64encode(payload).decode(),
+                    "type": "BINARY",
+                }
+            ],
+        }
+
+    async def test_matches_the_requested_signal_not_index_zero(self, client, transport):
+        wanted = b"\xff\xd8\xff\xe0" + b"\x01" * 40
+        other = b"\xff\xd8\xff\xe0" + b"\x02" * 90  # larger, and listed first
+        transport.execute.return_value = photo_images_response(
+            devices=[self._device("sig-other", other), self._device("sig-me", wanted)]
+        )
+
+        result = await client.get_full_image(_make_installation(), "sig-me", "IMG")
+
+        assert result == wanted
+
+    async def test_falls_back_to_the_first_device_when_no_signal_matches(
+        self, client, transport
+    ):
+        """Some panels omit idSignal on the device rows — keep the old behaviour."""
+        payload = b"\xff\xd8\xff\xe0" + b"\x03" * 20
+        device = self._device("sig-any", payload)
+        device.pop("idSignal")
+        transport.execute.return_value = photo_images_response(devices=[device])
+
+        result = await client.get_full_image(_make_installation(), "sig-me", "IMG")
+
+        assert result == payload
+
+    async def test_numeric_and_string_signals_compare_equal(self, client, transport):
+        payload = b"\xff\xd8\xff\xe0" + b"\x04" * 20
+        device = self._device("sig", payload)
+        device["idSignal"] = 17444816488
+        transport.execute.return_value = photo_images_response(devices=[device])
+
+        result = await client.get_full_image(_make_installation(), "17444816488", "IMG")
+
+        assert result == payload

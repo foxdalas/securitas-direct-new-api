@@ -125,10 +125,22 @@ class VerisureCamera(CoordinatorEntity[CameraCoordinator], Camera):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:  # type: ignore[override]
-        """Return extra state attributes."""
+        """Return extra state attributes.
+
+        In full mode the timestamp is reported only when a full image is
+        actually held.  The frontend card uses its presence as the test for
+        "this camera has a full-resolution view" — reporting the thumbnail's
+        timestamp regardless made it offer a view that could only ever render
+        the placeholder, which is what a camera with no recent capture always
+        has.  The value itself stays the thumbnail's: the full image is fetched
+        from that frame's ``id_signal``, so they describe the same moment.
+        """
+        data = self.coordinator.data
         timestamp: str | None = None
-        if self.coordinator.data is not None:
-            thumb = self.coordinator.data.thumbnails.get(self._zone_id)
+        if data is not None and (
+            self._mode != "full" or self._zone_id in data.full_images
+        ):
+            thumb = data.thumbnails.get(self._zone_id)
             if thumb is not None:
                 timestamp = thumb.timestamp
         attrs: dict[str, Any] = {"image_timestamp": timestamp}

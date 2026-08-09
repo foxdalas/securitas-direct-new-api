@@ -13,7 +13,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, NoReturn
 
 from homeassistant.config_entries import ConfigEntry
@@ -614,12 +614,23 @@ class CameraCoordinator(DataUpdateCoordinator[CameraData]):
     def _thumbnail_is_recent(
         thumbnail: ThumbnailResponse, max_age_hours: int = 1
     ) -> bool:
-        """Check if a thumbnail is recent enough to have a full image available."""
+        """Check if a thumbnail is recent enough to have a full image available.
+
+        The panel's naive ``YYYY-MM-DD HH:MM:SS`` timestamps are in the
+        installation's local time — the same basis ``_mark_ha_echoes`` already
+        compares against ``datetime.now()``, and confirmed against a live panel
+        whose thumbnail time matched its own activity-log entry for the same
+        photo request. (Fields serialised with an explicit ``Z``, such as
+        ``protomResponseDate``, are UTC; the naive ones are not.)
+
+        Reading them as UTC skewed this check by the local UTC offset: too
+        permissive east of Greenwich, and permanently "too old" west of it —
+        where the poll path would never fetch a full image at all.
+        """
         parsed = _parse_panel_time(thumbnail.timestamp)
         if parsed is None:
             return False
-        age = datetime.now(tz=UTC) - parsed.replace(tzinfo=UTC)
-        return age < timedelta(hours=max_age_hours)
+        return datetime.now() - parsed < timedelta(hours=max_age_hours)
 
     async def _fetch_full_image(
         self,

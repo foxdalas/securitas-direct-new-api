@@ -970,3 +970,103 @@ class TestPanelTimestampNormalisation:
         """Better a visible oddity than a silently missing attribute."""
         assert self._norm("2026-03-09T12:00:00Z") == "2026-03-09T12:00:00Z"
         assert self._norm("nonsense") == "nonsense"
+
+
+class TestTokenRotationOnCoordinatorUpdate:
+    """HA keeps only two access tokens, so a needless rotation costs a stream.
+
+    A capture pushes two coordinator updates back to back — the fresh
+    thumbnail, then the full image fetched in the background. Rotating on both
+    evicted the token an open dialog was streaming with, and HA answered the
+    stream with "401 Signature expired".
+    """
+
+    @staticmethod
+    def _cam(coordinator, hub, installation, device, full=False):
+        from custom_components.securitas.camera import (
+            VerisureCamera,
+            VerisureCameraFull,
+        )
+
+        cls = VerisureCameraFull if full else VerisureCamera
+        cam = cls(coordinator, hub, installation, device)
+        cam.async_update_token = MagicMock()  # type: ignore[method-assign]
+        cam.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
+        return cam
+
+    @staticmethod
+    def _thumb(id_signal="sig-1", timestamp="2026-08-09 18:14:25"):
+        return ThumbnailResponse(
+            image=base64.b64encode(b"\xff\xd8\xff\xe0x").decode(),
+            id_signal=id_signal,
+            timestamp=timestamp,
+        )
+
+    def test_unchanged_frame_does_not_rotate(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": self._thumb()}, full_images={}
+        )
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+        cam._handle_coordinator_update()  # first update adopts the frame
+        cam.async_update_token.reset_mock()
+        cam.async_write_ha_state.reset_mock()
+
+        cam._handle_coordinator_update()
+
+        cam.async_update_token.assert_not_called()
+        # State is still written — availability and attributes may have moved.
+        cam.async_write_ha_state.assert_called_once()
+
+    def test_new_thumbnail_rotates(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": self._thumb()}, full_images={}
+        )
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+        cam._handle_coordinator_update()
+        cam.async_update_token.reset_mock()
+
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": self._thumb(id_signal="sig-2")}, full_images={}
+        )
+        cam._handle_coordinator_update()
+
+        cam.async_update_token.assert_called_once()
+
+    def test_full_image_arriving_does_not_rotate_the_thumbnail_entity(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        """The capture's second update must not cost the thumbnail its token."""
+        thumb = self._thumb()
+        mock_coordinator.data = CameraData(thumbnails={"QR10": thumb}, full_images={})
+        cam = self._cam(mock_coordinator, mock_hub, installation, camera_device)
+        cam._handle_coordinator_update()
+        cam.async_update_token.reset_mock()
+
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": thumb}, full_images={"QR10": b"\xff\xd8full"}
+        )
+        cam._handle_coordinator_update()
+
+        cam.async_update_token.assert_not_called()
+
+    def test_full_entity_rotates_when_its_own_image_arrives(
+        self, mock_coordinator, mock_hub, installation, camera_device
+    ):
+        thumb = self._thumb()
+        mock_coordinator.data = CameraData(thumbnails={"QR10": thumb}, full_images={})
+        cam = self._cam(
+            mock_coordinator, mock_hub, installation, camera_device, full=True
+        )
+        cam._handle_coordinator_update()
+        cam.async_update_token.reset_mock()
+
+        mock_coordinator.data = CameraData(
+            thumbnails={"QR10": thumb}, full_images={"QR10": b"\xff\xd8full"}
+        )
+        cam._handle_coordinator_update()
+
+        cam.async_update_token.assert_called_once()

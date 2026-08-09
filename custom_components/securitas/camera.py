@@ -134,6 +134,7 @@ class VerisureCamera(CoordinatorEntity[CameraCoordinator], Camera):
         self._attr_device_info = camera_device_info(
             installation, camera_device, hub.hass
         )
+        self._frame_signature: tuple[Any, ...] = ()
 
     def _resolve_image(self) -> tuple[bytes | None, str]:
         """Return the current frame, and why it is or is not available.
@@ -233,10 +234,37 @@ class VerisureCamera(CoordinatorEntity[CameraCoordinator], Camera):
             signal_type=signal_type,
         )
 
+    def _current_frame_signature(self) -> tuple[Any, ...]:
+        """Identify the frame this entity would serve right now."""
+        data = self.coordinator.data
+        if data is None:
+            return ()
+        thumb = data.thumbnails.get(self._zone_id)
+        source = (thumb.id_signal, thumb.timestamp) if thumb else (None, None)
+        if self._mode == "full":
+            image = data.full_images.get(self._zone_id)
+            return (*source, len(image) if image else 0)
+        return source
+
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator — rotate token so frontend re-fetches."""
-        self.async_update_token()
+        """Rotate the access token only when this entity's frame really changed.
+
+        Rotating makes the frontend re-fetch, which is what we want on a new
+        frame — but HA keeps only two access tokens per camera (a deque of
+        maxlen 2), so every rotation invalidates the one before last.
+
+        A capture pushes two coordinator updates in quick succession: the fresh
+        thumbnail first, then the full image its background task fetches. When
+        both entities rotated on both updates, the token an already-open
+        more-info dialog was streaming with fell out of the deque and HA
+        rejected the stream with "401 Signature expired" — the full-image
+        entity worst of all, since the second update is the one it causes.
+        """
+        signature = self._current_frame_signature()
+        if signature != self._frame_signature:
+            self._frame_signature = signature
+            self.async_update_token()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

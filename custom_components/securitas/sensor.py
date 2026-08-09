@@ -199,7 +199,7 @@ class ActivityLogSensor(  # type: ignore[override]
     `verisure_owa_activity` event bus rather than reading these attributes.
     """
 
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
     _attr_icon = "mdi:format-list-bulleted"
 
     def __init__(
@@ -211,7 +211,7 @@ class ActivityLogSensor(  # type: ignore[override]
         self._installation = installation
         self._attr_device_info = securitas_device_info(installation)
         self._attr_unique_id = f"v4_securitas_direct.{installation.number}_activity_log"
-        self._attr_name = f"{installation.alias} Activity Log"
+        self._attr_name = "Activity Log"
         # Memoise extra_state_attributes — HA reads it from the recorder, the
         # frontend, the template engine, and websocket subscribers, often
         # several times per state update.  Cached by coordinator.data identity.

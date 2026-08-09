@@ -722,16 +722,16 @@ class TestActivityLogSensor:
         assert installation.number in sensor._attr_unique_id  # type: ignore[operator]
         assert "activity" in sensor._attr_unique_id  # type: ignore[operator]
 
-    def test_name_contains_installation_alias(self):
+    def test_name_is_short_and_alias_independent(self):
+        """The device carries the alias; the entity name is the suffix only."""
+        coordinator = _make_activity_coordinator(data=None)
         installation = make_installation()
-        coordinator = _make_activity_coordinator()
         sensor = ActivityLogSensor(coordinator, installation)
-        assert installation.alias in sensor._attr_name  # type: ignore[operator]
 
-
-# ===========================================================================
-# VerisureLock tests
-# ===========================================================================
+        assert sensor._attr_name == "Activity Log"
+        assert sensor._attr_has_entity_name is True
+        assert installation.alias not in (sensor._attr_name or "")
+        assert sensor._attr_has_entity_name is True
 
 
 class TestVerisureLockInit:

@@ -2735,3 +2735,117 @@ class TestDiscoverZones:
         await _discover_zones(MagicMock(), hub, make_installation(), {}, MagicMock())
 
         hub.get_devices.assert_not_called()
+
+
+class TestPruneSupersededAliasZones:
+    """An alias zone is deleted once the inventory accounts for it."""
+
+    @staticmethod
+    def _entry(hass):
+        from custom_components.securitas.const import DOMAIN
+
+        entry = MockConfigEntry(domain=DOMAIN, data={})
+        entry.add_to_hass(hass)
+        return entry
+
+    @staticmethod
+    def _register(hass, entry, unique_id, device_name="Puerta"):
+        from homeassistant.helpers import device_registry as dr
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.securitas.const import DOMAIN
+
+        device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, unique_id.rsplit("_", 1)[0] + "_dev")},
+            name=device_name,
+        )
+        return er.async_get(hass).async_get_or_create(
+            "binary_sensor", DOMAIN, unique_id, config_entry=entry, device_id=device.id
+        )
+
+    @pytest.mark.asyncio
+    async def test_removes_the_alias_pair_when_the_zone_is_known(self, hass):
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.securitas.binary_sensor import ZoneTarget
+        from custom_components.securitas.discovery import (
+            _prune_superseded_alias_zones,
+        )
+
+        entry = self._entry(hass)
+        stale_open = self._register(
+            hass, entry, "v4_securitas_direct.123456_zone_alias_puerta"
+        )
+        stale_batt = self._register(
+            hass, entry, "v4_securitas_direct.123456_zone_battery_alias_puerta"
+        )
+        keep = self._register(hass, entry, "v4_securitas_direct.123456_zone_MR03")
+
+        target = ZoneTarget(
+            key="MR03", name="Puerta", match_name="Puerta", model="Magnetic contact"
+        )
+        _prune_superseded_alias_zones(hass, entry, make_installation(), [target])
+
+        registry = er.async_get(hass)
+        assert registry.async_get(stale_open.entity_id) is None
+        assert registry.async_get(stale_batt.entity_id) is None
+        assert registry.async_get(keep.entity_id) is not None
+
+    @pytest.mark.asyncio
+    async def test_leaves_unrelated_alias_zones_alone(self, hass):
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.securitas.binary_sensor import ZoneTarget
+        from custom_components.securitas.discovery import (
+            _prune_superseded_alias_zones,
+        )
+
+        entry = self._entry(hass)
+        other = self._register(
+            hass, entry, "v4_securitas_direct.123456_zone_alias_neverseen"
+        )
+
+        target = ZoneTarget(key="MR03", name="Puerta", match_name="Puerta")
+        _prune_superseded_alias_zones(hass, entry, make_installation(), [target])
+
+        assert er.async_get(hass).async_get(other.entity_id) is not None
+
+    @pytest.mark.asyncio
+    async def test_truncated_alias_is_not_guessed_away(self, hass):
+        """Differing slugs mean we cannot be sure it is the same zone."""
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.securitas.binary_sensor import ZoneTarget
+        from custom_components.securitas.discovery import (
+            _prune_superseded_alias_zones,
+        )
+
+        entry = self._entry(hass)
+        truncated = self._register(
+            hass, entry, "v4_securitas_direct.123456_zone_alias_pfincameret"
+        )
+
+        target = ZoneTarget(
+            key="MG11", name="Pfincameretta", match_name="Pfincameretta"
+        )
+        _prune_superseded_alias_zones(hass, entry, make_installation(), [target])
+
+        assert er.async_get(hass).async_get(truncated.entity_id) is not None
+
+    @pytest.mark.asyncio
+    async def test_no_targets_is_a_no_op(self, hass):
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.securitas.discovery import (
+            _prune_superseded_alias_zones,
+        )
+
+        entry = self._entry(hass)
+        kept = self._register(
+            hass, entry, "v4_securitas_direct.123456_zone_alias_puerta"
+        )
+
+        _prune_superseded_alias_zones(hass, entry, make_installation(), [])
+
+        assert er.async_get(hass).async_get(kept.entity_id) is not None

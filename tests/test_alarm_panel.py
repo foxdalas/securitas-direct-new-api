@@ -1085,10 +1085,16 @@ class TestSetArmState:
 class TestProperties:
     """Tests for simple property accessors."""
 
-    def test_name_returns_main_prefixed_alias(self):
-        """Combined (main) panel name is 'Main - <installation alias>'."""
+    def test_name_is_none_so_ha_uses_the_device_name(self):
+        """The combined panel is the device's primary entity.
+
+        Its name comes from the device, so renaming the device in HA renames
+        the panel. Baking in the installation alias meant a rename had no
+        effect, and Verisure sets that alias to the postal address.
+        """
         alarm = make_alarm()
-        assert alarm.name == "Main - Home"
+        assert alarm.name is None
+        assert alarm.has_entity_name is True
 
     def test_code_format_none_when_no_code(self):
         """code_format is None when no code is configured."""
@@ -5623,33 +5629,24 @@ class TestSubPanelSuggestedObjectId:
     """Sub-panels must seed a single-alias entity_id slot.
 
     HA's entity_platform routes ``entity.suggested_object_id`` into the
-    registry's ``object_id_base`` parameter, and HA 2026.5+ unconditionally
-    prepends the device name onto ``object_id_base`` (for entities with
-    ``has_entity_name=False``) — running a strip-prefix heuristic first to
-    avoid doubling the name. That heuristic only recognises space, dash, or
-    colon as the separator following the matched prefix; an underscore
-    between ``<alias>`` and ``_<circuit>`` is NOT stripped, so the device
-    name ends up prepended twice and the entity_id comes out as
-    ``alarm_control_panel.<alias>_<alias>_<circuit>`` (the "doubled-alias
-    collision form").
-
-    The sub-panel mixin therefore returns ``"<alias> <circuit>"`` (space
-    separator) from ``suggested_object_id`` — the space satisfies the
-    strip-prefix heuristic on HA 2026.5+ and slugify still maps to the
-    canonical ``<alias>_<circuit>`` slot in every supported HA version.
+    registry's ``object_id_base``, and with ``has_entity_name = True`` the
+    registry composes ``f"{device_name} {object_id_base}"`` before slugifying.
+    Returning the alias here as well would double it into
+    ``<alias>_<alias>_<circuit>``, so the circuit alone is returned and HA
+    supplies the device name.
     """
 
     def test_interior(self):
         panel = _make_interior_panel()
-        assert panel.suggested_object_id == "TestHome interior"
+        assert panel.suggested_object_id == "interior"
 
     def test_perimeter(self):
         panel = _make_perimeter_panel()
-        assert panel.suggested_object_id == "TestHome perimeter"
+        assert panel.suggested_object_id == "perimeter"
 
     def test_annex(self):
         panel = _make_annex_panel()
-        assert panel.suggested_object_id == "TestHome annex"
+        assert panel.suggested_object_id == "annex"
 
     @pytest.mark.skipif(
         not _HAS_OBJECT_ID_BASE_KWARG,
@@ -7220,15 +7217,14 @@ class TestCombinedPanelEntityId:
     entity_id and means dashboards keep working through a fresh v5 setup.
     """
 
-    def test_combined_panel_suggested_object_id_is_alias(self):
-        alarm = make_alarm()
-        # Reach into the combined panel and check the slug source HA uses
-        # when generating the entity_id for a fresh install.
-        assert alarm.suggested_object_id == alarm.installation.alias
+    def test_combined_panel_leaves_the_slug_to_ha(self):
+        """No override: with name=None the registry slugifies the device name.
 
-    def test_combined_panel_friendly_name_keeps_main_prefix(self):
+        That yields the same ``alarm_control_panel.<alias>`` slot the explicit
+        override used to force, because the device is named after the alias.
+        """
         alarm = make_alarm()
-        assert alarm.name.startswith("Main - ")
+        assert alarm.suggested_object_id is None
 
 
 # ===========================================================================

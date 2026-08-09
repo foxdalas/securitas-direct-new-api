@@ -129,7 +129,7 @@ class PanelProblemSpec:
 PANEL_PROBLEM_SPECS: tuple[PanelProblemSpec, ...] = (
     PanelProblemSpec(
         key="alarm_triggered",
-        name="Alarm Triggered",
+        name="Triggered",
         device_class=BinarySensorDeviceClass.SAFETY,
         on_categories=frozenset({ActivityCategory.ALARM}),
         # DISARMED clears as well as ALARM_RESOLVED: only one panel type code

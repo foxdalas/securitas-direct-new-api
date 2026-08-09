@@ -731,8 +731,22 @@ class CameraCoordinator(DataUpdateCoordinator[CameraData]):
                     thumb.id_signal,
                 )
                 full_bytes = await self._fetch_full_image(thumb, zone_id)
-                if full_bytes:
+                # Same JPEG check the capture path applies before storing.
+                # get_full_image deliberately does not validate the format (the
+                # activity card accepts any image), and the camera entity
+                # serves these bytes into an MJPEG stream that declares
+                # image/jpeg — a non-JPEG there renders as a broken image even
+                # though a plain download of the same bytes looks fine.
+                if full_bytes and full_bytes.startswith(b"\xff\xd8"):
                     full_images[zone_id] = full_bytes
+                elif full_bytes:
+                    _LOGGER.warning(
+                        "Full image for zone %s is not JPEG data "
+                        "(%d bytes starting with %r) — ignoring",
+                        zone_id,
+                        len(full_bytes),
+                        full_bytes[:16],
+                    )
 
         return CameraData(thumbnails=thumbnails, full_images=full_images)
 

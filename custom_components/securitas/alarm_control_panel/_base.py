@@ -458,15 +458,17 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
             self._state = AlarmControlPanelState.ARMED_CUSTOM_BYPASS
             self._log_unmapped_proto_code(status.protom_response)
 
-    def _check_code_for_arm_if_required(self, code: str | None) -> bool:
+    async def _check_code_for_arm_if_required(self, code: str | None) -> bool:
         """Check the code only if arming requires a code and a PIN is configured."""
         if not self._code_hash or not self.code_arm_required:
             return True
-        return self._check_code(code)
+        return await self._check_code(code)
 
-    def _check_code(self, code: str | None) -> bool:
+    async def _check_code(self, code: str | None) -> bool:
         """Check that the code entered in the panel matches the configured PIN hash."""
-        result: bool = not self._code_hash or verify_pin(code, self._code_hash)
+        result = not self._code_hash or await self.hass.async_add_executor_job(
+            verify_pin, code, self._code_hash
+        )
         if not result:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
@@ -503,7 +505,7 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
         self, state: AlarmControlPanelState, code: str | None = None
     ) -> None:
         """Arm the alarm in the specified mode."""
-        if self._check_code_for_arm_if_required(code):
+        if await self._check_code_for_arm_if_required(code):
             await self._dismiss_pending_force_context_on_siblings(
                 reason=DISMISSAL_REASON_USER_ARM,
                 new_mode=state,
@@ -1027,7 +1029,7 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
-        if not self._check_code(code):
+        if not await self._check_code(code):
             return
         if self._operation_in_progress:
             _LOGGER.debug(
@@ -1783,7 +1785,7 @@ class BaseVerisureOwaAlarmPanel(  # type: ignore[override]
             )
             return
         if code is not None:
-            self._check_code(code)
+            await self._check_code(code)
         mode = self._force_context["mode"]
         ref_id = self._force_context["reference_id"]
         suid = self._force_context["suid"]

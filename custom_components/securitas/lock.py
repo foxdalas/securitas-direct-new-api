@@ -453,7 +453,7 @@ class VerisureLock(  # type: ignore[override]
 
     # -- Lock/unlock operations ----------------------------------------------
 
-    def _check_code(self, code: str | None) -> None:
+    async def _check_code(self, code: str | None) -> None:
         """Reject the operation unless *code* matches the configured alarm PIN.
 
         A no-op unless CONF_LOCK_CODE_REQUIRED is enabled and a PIN is
@@ -468,7 +468,9 @@ class VerisureLock(  # type: ignore[override]
         rejected a missing or malformed one against ``code_format`` before
         ``async_lock`` is reached.
         """
-        if self.code_format and not verify_pin(code, self._code_hash):
+        if self.code_format and not await self.hass.async_add_executor_job(
+            verify_pin, code, self._code_hash
+        ):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="invalid_pin_code",
@@ -666,7 +668,7 @@ class VerisureLock(  # type: ignore[override]
         raise HomeAssistantError(message)
 
     async def async_lock(self, **kwargs: Any) -> None:
-        self._check_code(kwargs.get(ATTR_CODE))
+        await self._check_code(kwargs.get(ATTR_CODE))
         error = await self._change_lock_mode(
             lock_state=True,
             transitional_state=LOCK_STATUS_LOCKING,
@@ -753,11 +755,11 @@ class VerisureLock(  # type: ignore[override]
         )
 
     async def async_unlock(self, **kwargs: Any) -> None:
-        self._check_code(kwargs.get(ATTR_CODE))
+        await self._check_code(kwargs.get(ATTR_CODE))
         await self._perform_user_unlock("Unlock")
 
     async def async_open(self, **kwargs: Any) -> None:
-        self._check_code(kwargs.get(ATTR_CODE))
+        await self._check_code(kwargs.get(ATTR_CODE))
         await self._perform_user_unlock("Open")
 
     @property

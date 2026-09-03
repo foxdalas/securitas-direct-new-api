@@ -26,10 +26,11 @@ _SALT_BYTES = 16
 
 # Ceiling on the iteration count read back out of a persisted hash. The count
 # is embedded so that raising _ITERATIONS keeps old entries verifiable, so this
-# has to leave generous headroom — but it can't be unbounded: verification runs
-# on the event loop, and a corrupted or hand-edited entry carrying a huge count
-# would otherwise hang every arm/disarm (or, past OpenSSL's own limit, raise
-# OverflowError, which is not a ValueError and would escape the guard below).
+# has to leave generous headroom — but it can't be unbounded: a corrupted or
+# hand-edited entry carrying a huge count would otherwise occupy an executor
+# worker for an excessive amount of time
+# (or, past OpenSSL's own limit, raise OverflowError, which is not a ValueError
+# and would escape the guard below).
 _MAX_ITERATIONS = 10_000_000
 
 

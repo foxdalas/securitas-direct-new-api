@@ -161,6 +161,9 @@ def make_lock(
     else:
         client.get_lock_modes = AsyncMock(return_value=[])
     hass = MagicMock()
+    hass.async_add_executor_job = AsyncMock(
+        side_effect=lambda target, *args: target(*args)
+    )
     hass.async_create_task = MagicMock()
     hass.services = MagicMock()
 
@@ -1340,7 +1343,7 @@ class TestVerisureLockPinCode:
         lock = make_lock(code="ab12", code_required=True)
         assert lock.code_format == r".+"
 
-    def test_code_gate_reads_the_keys_build_config_dict_writes(self):
+    async def test_code_gate_reads_the_keys_build_config_dict_writes(self):
         """The gate must engage on a config built by production code.
 
         ``make_lock`` hand-rolls ``client.config``, so a rename of the PIN
@@ -1359,8 +1362,16 @@ class TestVerisureLockPinCode:
 
         assert lock.code_format == r"^\d+$"
         with pytest.raises(ServiceValidationError):
-            lock._check_code("9999")
-        lock._check_code("1234")  # correct PIN — must not raise
+            await lock._check_code("9999")
+        await lock._check_code("1234")  # correct PIN — must not raise
+
+    async def test_async_code_check_runs_verification_in_executor(self):
+        """Runtime PIN verification must not block HA's event loop."""
+        lock = make_lock(code="1234", code_required=True)
+
+        await lock._check_code("1234")
+
+        lock.hass.async_add_executor_job.assert_awaited_once()
 
     async def test_async_lock_succeeds_with_correct_code(self):
         lock = make_lock(code="1234", code_required=True, poll_status="2")

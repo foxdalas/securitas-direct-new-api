@@ -110,11 +110,10 @@ def test_verify_rejects_corrupt_fields_without_raising(encoded):
 def test_verify_rejects_absurd_iteration_count_without_computing_it():
     """A corrupted iteration count must be rejected, not honoured.
 
-    verify_pin runs on the event loop by design, on a cost we measured and
-    accepted. Trusting the persisted count turns that bounded cost into an
-    unbounded one: a garbled or hand-edited entry would hang every
-    arm/disarm. The rejection has to be cheap — if this test is slow, the
-    bound isn't being applied before the derivation.
+    Runtime callers run verify_pin in HA's executor. Trusting the persisted
+    count would nevertheless turn a bounded cost into an unbounded one and
+    occupy an executor worker indefinitely. The rejection has to be cheap —
+    if this test is slow, the bound isn't being applied before the derivation.
     """
     _alg, _iters, salt_hex, hash_hex = hash_pin("1234").split("$")
     forged = f"pbkdf2_sha256${10**12}${salt_hex}${hash_hex}"

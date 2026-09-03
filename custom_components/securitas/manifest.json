@@ -7,8 +7,9 @@
     "config_flow": true,
     "dependencies": ["http"],
     "documentation": "https://github.com/guerrerotook/securitas-direct-new-api",
+    "integration_type": "hub",
     "iot_class": "cloud_polling",
     "issue_tracker": "https://github.com/guerrerotook/securitas-direct-new-api/issues",
-    "requirements": [],
+    "requirements": ["pydantic>=2.10.6,<3.0.0"],
     "version": "5.8.0-beta.2"
 }

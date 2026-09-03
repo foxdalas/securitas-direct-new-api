@@ -386,8 +386,10 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         new_data = dict(config_entry.data)
         new_options = dict(config_entry.options)
         seen: dict[str, tuple[str | None, bool]] = {}
-        _hash_legacy_plaintext_code(new_data, seen)
-        _hash_legacy_plaintext_code(new_options, seen)
+        await hass.async_add_executor_job(_hash_legacy_plaintext_code, new_data, seen)
+        await hass.async_add_executor_job(
+            _hash_legacy_plaintext_code, new_options, seen
+        )
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=5
         )
@@ -944,7 +946,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, object]) -> bool:  
     user to delete it manually.
     """
     orphan = Path(hass.config.path("custom_components", "verisure_owa"))
-    if orphan.is_dir():
+    if await hass.async_add_executor_job(orphan.is_dir):
         from homeassistant.helpers import issue_registry as ir
 
         ir.async_create_issue(

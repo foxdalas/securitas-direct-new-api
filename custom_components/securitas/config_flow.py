@@ -300,7 +300,8 @@ def _get_notify_options(hass: HomeAssistant) -> list[dict[str, str]]:
     ]
 
 
-def _resolve_code_submission(
+async def _resolve_code_submission(
+    hass: HomeAssistant,
     raw_code: str,
     existing_hash: str | None,
     existing_is_numeric: bool,
@@ -324,7 +325,7 @@ def _resolve_code_submission(
     """
     if existing_hash and raw_code == _CODE_UNCHANGED_SENTINEL:
         return existing_hash, existing_is_numeric
-    return encode_pin(raw_code)
+    return await hass.async_add_executor_job(encode_pin, raw_code)
 
 
 def _build_settings_schema(
@@ -963,8 +964,11 @@ class FlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             user_input = _flatten_sections(user_input)
             # Fresh install — nothing pre-filled the field, so there is no
             # existing PIN to carry forward and no sentinel to interpret.
-            user_input[CONF_CODE_HASH], user_input[CONF_CODE_IS_NUMERIC] = encode_pin(
-                user_input.pop(CONF_CODE, DEFAULT_CODE)
+            (
+                user_input[CONF_CODE_HASH],
+                user_input[CONF_CODE_IS_NUMERIC],
+            ) = await self.hass.async_add_executor_job(
+                encode_pin, user_input.pop(CONF_CODE, DEFAULT_CODE)
             )
             # Toggles belong on entry.options, not entry.data.
             for key in PANEL_OPTION_KEYS:
@@ -1088,7 +1092,8 @@ class VerisureOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             user_input = _flatten_sections(user_input)
             raw_code = user_input.pop(CONF_CODE, DEFAULT_CODE)
-            code_hash, code_is_numeric = _resolve_code_submission(
+            code_hash, code_is_numeric = await _resolve_code_submission(
+                self.hass,
                 raw_code,
                 self._get(CONF_CODE_HASH, None),
                 self._get(CONF_CODE_IS_NUMERIC, False),

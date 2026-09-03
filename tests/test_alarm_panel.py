@@ -585,6 +585,9 @@ def make_alarm(
     client.disarm_alarm = AsyncMock()
 
     hass = MagicMock()
+    hass.async_add_executor_job = AsyncMock(
+        side_effect=lambda target, *args: target(*args)
+    )
 
     def _consume_coro(coro, *args, **kwargs):
         if hasattr(coro, "close"):
@@ -900,34 +903,42 @@ class TestUpdateStatusAlarmPeri:
 class TestCheckCode:
     """Tests for _check_code()."""
 
-    def test_empty_code_config_allows_any(self):
+    async def test_async_check_runs_hash_verification_in_executor(self):
+        """Runtime PIN verification must not block HA's event loop."""
+        alarm = make_alarm(code="1234")
+
+        assert await alarm._check_code("1234") is True
+
+        alarm.hass.async_add_executor_job.assert_awaited_once()
+
+    async def test_empty_code_config_allows_any(self):
         """Empty code config means any code passes."""
         alarm = make_alarm(code="")
-        assert alarm._check_code("1234") is True
-        assert alarm._check_code(None) is True
+        assert await alarm._check_code("1234") is True
+        assert await alarm._check_code(None) is True
 
-    def test_none_code_config_allows_any(self):
+    async def test_none_code_config_allows_any(self):
         """None code config (no key) means any code passes."""
         alarm = make_alarm()
-        assert alarm._check_code("9999") is True
+        assert await alarm._check_code("9999") is True
 
-    def test_matching_code_returns_true(self):
+    async def test_matching_code_returns_true(self):
         """Matching code returns True."""
         alarm = make_alarm(code="1234")
-        assert alarm._check_code("1234") is True
+        assert await alarm._check_code("1234") is True
 
-    def test_non_matching_code_raises_service_validation_error(self):
+    async def test_non_matching_code_raises_service_validation_error(self):
         """Non-matching code raises ServiceValidationError."""
         alarm = make_alarm(code="1234")
         with pytest.raises(ServiceValidationError):
-            alarm._check_code("0000")
+            await alarm._check_code("0000")
 
-    def test_numeric_code_string_compared(self):
+    async def test_numeric_code_string_compared(self):
         """Numeric code string in config is compared correctly."""
         alarm = make_alarm(code="1234")
-        assert alarm._check_code("1234") is True
+        assert await alarm._check_code("1234") is True
         with pytest.raises(ServiceValidationError):
-            alarm._check_code("5678")
+            await alarm._check_code("5678")
 
 
 # ===========================================================================
@@ -1809,21 +1820,21 @@ class TestHandleCoordinatorUpdate:
 class TestCheckCodeForArmIfRequired:
     """Tests for _check_code_for_arm_if_required()."""
 
-    def test_no_code_configured_returns_true(self):
+    async def test_no_code_configured_returns_true(self):
         """No code configured: returns True regardless of input."""
         alarm = make_alarm()  # no code
-        assert alarm._check_code_for_arm_if_required(None) is True
-        assert alarm._check_code_for_arm_if_required("1234") is True
+        assert await alarm._check_code_for_arm_if_required(None) is True
+        assert await alarm._check_code_for_arm_if_required("1234") is True
 
-    def test_code_configured_but_arm_required_false(self):
+    async def test_code_configured_but_arm_required_false(self):
         """Code configured but code_arm_required=False: returns True."""
         alarm = make_alarm(code="1234")
         # code_arm_required defaults to False
         assert alarm._attr_code_arm_required is False
-        assert alarm._check_code_for_arm_if_required(None) is True
-        assert alarm._check_code_for_arm_if_required("wrong") is True
+        assert await alarm._check_code_for_arm_if_required(None) is True
+        assert await alarm._check_code_for_arm_if_required("wrong") is True
 
-    def test_code_configured_arm_required_correct_code(self):
+    async def test_code_configured_arm_required_correct_code(self):
         """Code configured AND code_arm_required=True with correct code: returns True."""
         config = {
             "PERI_alarm": False,
@@ -1837,9 +1848,9 @@ class TestCheckCodeForArmIfRequired:
             "code_arm_required": True,
         }
         alarm = make_alarm(config=config)
-        assert alarm._check_code_for_arm_if_required("5678") is True
+        assert await alarm._check_code_for_arm_if_required("5678") is True
 
-    def test_code_configured_arm_required_wrong_code(self):
+    async def test_code_configured_arm_required_wrong_code(self):
         """Code configured AND code_arm_required=True with wrong code: raises ServiceValidationError."""
         config = {
             "PERI_alarm": False,
@@ -1854,7 +1865,7 @@ class TestCheckCodeForArmIfRequired:
         }
         alarm = make_alarm(config=config)
         with pytest.raises(ServiceValidationError):
-            alarm._check_code_for_arm_if_required("0000")
+            await alarm._check_code_for_arm_if_required("0000")
 
 
 # ===========================================================================
@@ -6400,7 +6411,7 @@ class TestPerimeterSubPanel:
                 annex=AnnexMode.OFF,
             )
         )
-        panel._check_code = MagicMock(return_value=True)
+        panel._check_code = AsyncMock(return_value=True)
         panel._execute_transition = AsyncMock(
             return_value=OperationStatus(
                 operation_status="OK",
